@@ -2,7 +2,7 @@
 
 A real-time fraud detection system built on the PaySim synthetic financial dataset. It trains an XGBoost model, explains its decisions with SHAP, monitors for concept drift using ADWIN, and ships everything as an interactive Streamlit app.
 
-**[→ Live demo](https://YOUR-APP-URL.streamlit.app)** — open it and click Score Transaction on the first screen. You should get a fraud flag within seconds.
+**[→ Live demo](https://paysimfrauddetector-bahcxzay2gufai7aemcplh.streamlit.app/)** — open it and click Score Transaction on the first screen. You should get a fraud flag within seconds.
 
 ---
 
