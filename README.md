@@ -28,16 +28,6 @@ Three tabs, three audiences.
 
 ---
 
-## Results
-
-| Metric | 
-  PR-AUC
-  ROC-AUC
-  F1 (fraud class)
-  Precision
-  Recall
-  Decision threshold
-
 The decision threshold was tuned using a cost function — a missed fraud costs $500, a false alarm costs $10 — rather than defaulting to 0.5. At 0.5 the model performs differently; at the tuned threshold it reflects something closer to what a real business would actually care about.
 
 **Why PR-AUC and not accuracy?** PaySim has a 0.129% fraud rate. A model that predicts "legitimate" for every single transaction scores 99.871% accuracy while catching zero fraud. Accuracy is the wrong metric here. PR-AUC focuses only on the positive class and can't be inflated by the model correctly ignoring millions of obvious legitimate transactions.
@@ -101,7 +91,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app loads from `models/streamlit_bundle.joblib` — no retraining needed. It should be running at `http://localhost:8501` in about ten seconds.
+The app loads from `models/streamlit_bundle.joblib` — no retraining needed.
 
 To reproduce the full pipeline from scratch, download the dataset and run the notebooks in order (Stages 1 through 14).
 
