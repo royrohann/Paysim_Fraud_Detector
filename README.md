@@ -1,101 +1,94 @@
 # PaySim Fraud Detector 🚨
 
-A real-time fraud detection system built on the PaySim synthetic financial dataset. It trains an XGBoost model, explains its decisions with SHAP, monitors for concept drift using ADWIN, and ships everything as an interactive Streamlit app.
+A fraud-detection project built on the PaySim synthetic mobile-money dataset. It trains XGBoost, sets the decision threshold by business cost, explains decisions with SHAP, replays a realistic fraud-tactic change through an ADWIN drift monitor, and serves everything in a Streamlit app.
 
-**[→ Live demo](https://paysimfrauddetector-bahcxzay2gufai7aemcplh.streamlit.app/)** — open it and click Score Transaction on the first screen. You should get a fraud flag within seconds.
+It also includes a **signal audit** that answers the question a near-perfect score should raise: *what is this number actually made of?*
+
+**[→ Live demo](https://paysimfrauddetector-bahcxzay2gufai7aemcplh.streamlit.app/)** — click **Score Transaction** on the first tab. The default inputs are a typical PaySim fraud, and the app flags it.
 
 ---
 
-## Why I built this
+## Results (test set = final 20% of simulated time)
 
-Most fraud detection portfolios stop at a confusion matrix. This one goes further and asks the more realistic question: *what happens after deployment?*
+| | Value |
+|---|---|
+| Test rows (TRANSFER + CASH_OUT) | 552,504 — 4,258 frauds |
+| No-skill PR-AUC baseline (test fraud rate) | 0.0077 |
+| XGBoost PR-AUC | 1.0000 (rounded) |
+| At the tuned threshold (0.970) | 4,256 of 4,258 frauds caught, 4 false alarms — recall 0.9995, precision 0.9991 |
+| At the default 0.5 threshold | 4,257 caught, 7 false alarms |
 
-Fraudsters don't stay still. They adapt to whatever defenses exist, which means a model trained today can quietly become useless six months from now — without throwing a single error or raising any alarm. This project builds the monitoring layer that catches that decay before it becomes a real problem.
+Model selection and threshold tuning use a validation slice (last 10% of the training period). The test set is touched once.
 
-The starting point for this dataset is also a good story. PaySim includes a column called `isFlaggedFraud` — a hardcoded business rule that flags any transfer over 200,000. Sounds reasonable. In practice it fires **16 times** across 6.36 million transactions and catches fewer than 0.2% of real frauds. The entire project is the answer to the question that raises.
+**An honest note on the threshold:** the validation slice holds only 268 frauds and the model separates all of them, so the "cost-optimal" threshold (0.970) is poorly pinned down. On the test set it cost $1,040 (2 missed frauds × $500 + 4 false alarms × $10) versus $570 at 0.5. With so few validation frauds, a cost-tuned threshold isn't reliable — it needs a bigger validation window or cross-validation over time.
+
+## Signal audit — why the score is so high
+
+| | Test PR-AUC |
+|---|---|
+| A. Full model (11 features, incl. balances *after* the transaction) | 1.0000 |
+| B. Decision-time features only | 0.9871 |
+| C. Decision-time, without the sender's balance | 0.5908 |
+| One rule: `amount == oldbalanceOrg` | recall 0.975 at precision 0.9998 |
+
+- PaySim's fraud script **empties the sender's account**: 98% of frauds move the exact balance, versus ~0% of legitimate transactions. One `if` statement catches 97.5% of test fraud.
+- `newbalanceOrig`, `newbalanceDest` and everything derived from them exist only **after** a transaction posts. A real-time system scoring a payment before it clears wouldn't have them (model B shows what's left without them).
+- The balance-error features work the opposite way from the usual story: it is **legitimate** PaySim rows whose books don't balance (~90% have a non-zero `errorBalanceOrig`), while fraud, by draining the exact balance, balances perfectly.
+
+Treat the headline metrics as a property of the simulator, not as evidence the model would perform like this on real payments.
+
+## Drift monitor
+
+Stage 12 replays all 552,504 test transactions in time order. At the 70% mark, fraudsters change tactics: they take 50–90% of the balance instead of all of it, and every dependent field is recomputed so each row stays consistent.
+
+- Fraud recall on the post-change rows drops from **99.9% to 14.0%**.
+- ADWIN (delta = 0.002) raises its first alert **3,839 transactions** after the change; the no-drift stream raises none.
+- Caveat: the replay assumes labels arrive instantly. Real chargebacks arrive days later, so monitoring input distributions (e.g. the share of transfers that empty an account) would catch this shift sooner than error-based monitoring.
 
 ---
 
 ## What the app does
 
-Three tabs, three audiences.
+- **Score a Transaction** — enter raw fields; engineered features are computed and the model scores it. A chart compares the transaction with typical legitimate and fraud rows.
+- **Model Performance** — test metrics, PR curves, confusion matrices at 0.5 vs the tuned threshold, SHAP importance, and the signal audit.
+- **Drift Monitor** — the Stage 12 replay with the ADWIN alert marked.
 
-**Score a Transaction** — enter a transaction's raw fields (amount, account balances, transaction type) and the app computes the engineered features automatically, scores it with the model, and tells you whether it's flagged as fraud. A feature-deviation chart shows which inputs pushed the decision in each direction — a simplified explainability view for anyone who doesn't want to read a SHAP paper.
+## Pipeline
 
-**Model Performance** — the metrics panel. PR-AUC as the headline number (not accuracy — more on that below), precision-recall curve, confusion matrix at the tuned threshold, and SHAP global feature importance. Everything you'd want to see if you were reviewing this model before putting it into production.
+| Notebook | Stages |
+|---|---|
+| `Fraud_Detection_Stg01_02` | Load `data.csv`, inspect, save `data/paysim_raw.parquet` |
+| `Fraud_Detection_Stg03_04` | Filter to TRANSFER/CASH_OUT, EDA |
+| `Fraud_Detection_Stg05_06` | Feature engineering, time-aware split |
+| `Fraud_Detection_Stg07_08` | LR baseline, XGBoost (scale_pos_weight), XGBoost + SMOTE |
+| `Fraud_Detection_Stg09_10` | Validation-based model selection, cost-tuned threshold, test evaluation, saves `models/best_model.joblib` |
+| `Fraud_Detection_Stg11_12` | SHAP explanations, drift replay with ADWIN |
+| `Fraud_Detection_Stg15_Signal_Audit` | Rule baseline and feature-set ablation (run before Stage 13) |
+| `Fraud_Detection_Stg13_14` | Builds `models/streamlit_bundle.joblib`, demo sample, `requirements.txt` |
 
-**Drift Monitor** — this is the part most projects skip. It replays 20,000 test transactions in temporal order through an ADWIN drift detector, shows the rolling error rate as a line chart, and marks exactly where the detector fired. Drift was simulated by flipping the strongest fraud signal feature at the 70% mark — you can see the error rate climb and the alert land.
+Run notebooks from the repo root so the relative paths (`data/`, `models/`, `reports/figures/`) resolve.
 
----
+### October 2026 fixes
 
-The decision threshold was tuned using a cost function — a missed fraud costs $500, a false alarm costs $10 — rather than defaulting to 0.5. At 0.5 the model performs differently; at the tuned threshold it reflects something closer to what a real business would actually care about.
-
-**Why PR-AUC and not accuracy?** PaySim has a 0.129% fraud rate. A model that predicts "legitimate" for every single transaction scores 99.871% accuracy while catching zero fraud. Accuracy is the wrong metric here. PR-AUC focuses only on the positive class and can't be inflated by the model correctly ignoring millions of obvious legitimate transactions.
-
----
-
-## How it works
-
-The pipeline runs in 15 stages across seven notebooks. Here's the short version.
-
-**Data** — PaySim has 6.36 million simulated mobile money transactions over 30 days. Fraud only appears in two transaction types: TRANSFER and CASH_OUT. Everything else is irrelevant noise. Filtering to just those two types removes about 5 million rows before the model ever sees the data.
-
-**Feature engineering** — the most useful features aren't in the raw data. They're derived from it. The key insight: for a legitimate transaction, the accounting has to balance. If you send $50,000, the sender's balance should drop by $50,000 and the receiver's should rise by $50,000. When that accounting doesn't add up — `errorBalanceOrig` and `errorBalanceDest` are non-zero — something went wrong. These two engineered features consistently rank at the top of the SHAP importance chart.
-
-**Class imbalance** — at 0.129% fraud, the class imbalance is severe. Three approaches were tested: logistic regression with balanced class weights (baseline), XGBoost with `scale_pos_weight` (primary model), and XGBoost with SMOTE in a pipeline (comparison). SMOTE was applied strictly after the train/test split — a common mistake is applying it before, which leaks synthetic data into the test set and produces unrealistically high scores.
-
-**Evaluation** — the train/test split is time-aware. Train on earlier transactions, test on later ones. This mirrors how the model would actually be used: trained on the past, predicting the future.
-
-**Explainability** — SHAP values for both global feature importance and per-prediction explanations. The balance-error features dominate the global chart, which matches the domain intuition: legitimate transactions balance their books, fraudulent ones don't.
-
-**Drift monitoring** — ADWIN (Adaptive Windowing) monitors the model's binary error stream in real time. It maintains a variable-length window and signals drift when two sub-windows within it diverge beyond what statistical chance would explain. It doesn't need a fixed window size or a manually tuned threshold — it figures out both automatically.
-
----
-
-## Project structure
-
-```
-├── app.py                              # Streamlit app — run this
-├── requirements.txt                    # deployment dependencies
-│
-├── models/
-│   └── streamlit_bundle.joblib         # model + metadata in one file
-│
-├── data/
-│   └── sample/
-│       └── demo_transactions.parquet   # 500 pre-scored rows for the demo
-│
-├── reports/
-│   └── figures/                        # plots generated by the notebooks
-│
-└── notebooks/
-    ├── fraud_detection_stage1_2.py     # environment, data loading, inspection
-    ├── fraud_detection_stage3_4.py     # cleaning and EDA
-    ├── fraud_detection_stage5_6.py     # feature engineering, train/test split
-    ├── fraud_detection_stage7_8.py     # imbalance handling, model training
-    ├── fraud_detection_stage9_10.py    # evaluation, threshold tuning
-    ├── fraud_detection_stage11_12.py   # SHAP explainability, drift monitoring
-    └── fraud_detection_stage13_14.py   # deployment bundle, Streamlit export
-```
-
-The raw PaySim CSV is not in this repository — it's 470 MB and doesn't belong in git. Download it from Kaggle (link below) and point `DATA_PATH` in Stage 1 to it.
-
----
+- **Shipped model could never flag fraud.** Early stopping on PR-AUC stopped at the first tree (validation PR-AUC was already 1.0), so the bundled model only output 0.48–0.53 while the threshold was 0.763. Early stopping now watches logloss.
+- **Model–threshold mismatch.** The threshold was tuned on the SMOTE model but the bundle always shipped the scale_pos_weight model. Stage 10 now saves the chosen model and Stage 13 ships exactly that, with a check that it reproduces Stage 10's recall.
+- **Test-set leakage in decisions.** Model selection and threshold tuning moved from the test set to a validation slice; LR and SMOTE models no longer train on the validation rows.
+- **App metrics showed 0.** Stage 13 guessed metric key names; Stage 10 now writes one `APP_METRICS` dict.
+- **Drift demo didn't drift.** Negating `errorBalanceOrig` changed nothing (fraud's value is ≈ 0). Replaced with the partial-drain scenario above.
+- **Figures missing on Linux.** `Reports/Figures` renamed to `reports/figures` to match the code (Streamlit Cloud is case-sensitive).
+- **Version pins.** `xgboost` and `scikit-learn` pinned to the versions that built the bundle.
+- Removed the notebook cell that patched SHAP's installed source (not needed with shap ≥ 0.46).
 
 ## Run it locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/paysim-fraud-detector
-cd paysim-fraud-detector
+git clone https://github.com/royrohann/Paysim_Fraud_Detector
+cd Paysim_Fraud_Detector
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app loads from `models/streamlit_bundle.joblib` — no retraining needed.
-
-To reproduce the full pipeline from scratch, download the dataset and run the notebooks in order (Stages 1 through 14).
-
----
+The app loads `models/streamlit_bundle.joblib`; no retraining needed. To rebuild from scratch, download the dataset, save it as `data.csv` in the repo root, and run the notebooks in the order above. Training notebooks also need `shap>=0.46 imbalanced-learn river seaborn "matplotlib<3.10"`.
 
 ## Tech stack
 
@@ -107,24 +100,13 @@ To reproduce the full pipeline from scratch, download the dataset and run the no
 | Drift detection | River (ADWIN) |
 | Visualisation | matplotlib, seaborn, Plotly |
 | App | Streamlit |
-| Persistence | joblib |
-
----
 
 ## Dataset
 
-[PaySim Synthetic Financial Dataset](https://www.kaggle.com/datasets/ealaxi/paysim1) — E.A. Lopez-Rojas, A. Elmir, S. Axelsson. *PaySim: A Financial Mobile Money Simulator for Fraud Detection.* EMSS 2016.
+[PaySim Synthetic Financial Dataset](https://www.kaggle.com/datasets/ealaxi/paysim1) — E.A. Lopez-Rojas, A. Elmir, S. Axelsson. *PaySim: A Financial Mobile Money Simulator for Fraud Detection.* EMSS 2016. 6,362,620 transactions, 8,213 frauds (0.129% overall; 0.30% within TRANSFER/CASH_OUT, where all fraud occurs).
 
-6,362,620 transactions. 8,213 frauds. 0.129% positive class.
+## Caveats
 
----
-
-## Honest caveats
-
-**PaySim is synthetic.** The fraud in this dataset follows a clean, predictable script — fraudsters transfer a balance to a mule account and cash out. Real fraud is messier, more varied, and actively tries to evade detection. The strong results here are partly a function of how structured the simulation is. Treat the metrics as a learning outcome, not a production benchmark.
-
-**The drift simulation is illustrative.** Injecting drift by flipping a feature value is a reproducible way to test a detector, but it's not the same as the slow, organic drift that happens in real systems. The real challenge is detecting drift that nobody designed and nobody is expecting.
-
-**Labels arrive late in production.** Customers often report fraud days after it happens. This project assumes labels are available immediately, which wouldn't be true in a live system. Late labels make online drift detection significantly harder and are worth acknowledging in any production design.
-
----
+- **PaySim is synthetic** and its fraud follows a fixed script. Real fraud is varied and adapts.
+- **Labels arrive late** in production; this project assumes they're immediate.
+- **The threshold is under-determined** by a validation slice with 268 frauds (see Results).

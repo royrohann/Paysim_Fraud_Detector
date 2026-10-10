@@ -1,0 +1,15 @@
+# Data files are large and not tracked
+data/*.parquet
+data/*.csv
+!data/sample/
+!data/sample/*.parquet
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+models/lr_baseline.joblib
+models/xgb_spw.joblib
+models/xgb_smote.joblib
+models/model_meta.joblib
+models/drift_stream.joblib
+models/ablation.joblib
+models/best_model.joblib
